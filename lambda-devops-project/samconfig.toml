@@ -1,0 +1,21 @@
+version = 0.1
+
+[dev.deploy.parameters]
+stack_name = "lambda-devops-dev"
+region = "ap-south-1"
+resolve_s3 = true
+s3_prefix = "lambda-devops-dev"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+fail_on_empty_changeset = false
+parameter_overrides = "Stage=dev"
+
+[prod.deploy.parameters]
+stack_name = "lambda-devops-prod"
+region = "ap-south-1"
+resolve_s3 = true
+s3_prefix = "lambda-devops-prod"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+fail_on_empty_changeset = false
+parameter_overrides = "Stage=prod"

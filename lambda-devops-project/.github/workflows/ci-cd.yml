@@ -1,0 +1,115 @@
+name: CI-CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # needed for OIDC login to AWS
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+jobs:
+  test:
+    name: Lint, validate, unit test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check src tests
+      - name: Validate template (cfn-lint)
+        run: cfn-lint template.yaml
+      - name: Unit tests
+        run: pytest -v
+      - name: SAM build
+        run: sam build
+
+  deploy-dev:
+    name: Deploy to dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sam build
+      - run: sam deploy --config-env dev --no-confirm-changeset --no-fail-on-empty-changeset
+      - id: outputs
+        name: Read API URL
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name lambda-devops-dev \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+          echo "api_url=$URL" >> "$GITHUB_OUTPUT"
+
+  integration-dev:
+    name: Smoke test dev
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tests/integration/test_api.py
+        env:
+          API_URL: ${{ needs.deploy-dev.outputs.api_url }}
+
+  deploy-prod:
+    name: Deploy to prod (canary)
+    needs: integration-dev
+    runs-on: ubuntu-latest
+    environment: production   # add required reviewers in GitHub for a manual approval gate
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sam build
+      - run: sam deploy --config-env prod --no-confirm-changeset --no-fail-on-empty-changeset
+      - id: outputs
+        name: Read API URL
+        run: |
+          URL=$(aws cloudformation describe-stacks --stack-name lambda-devops-prod \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)
+          echo "api_url=$URL" >> "$GITHUB_OUTPUT"
+
+  smoke-prod:
+    name: Smoke test prod
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tests/integration/test_api.py
+        env:
+          API_URL: ${{ needs.deploy-prod.outputs.api_url }}

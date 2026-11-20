@@ -1,0 +1,6 @@
+{
+  "ApiFunction": {
+    "TABLE_NAME": "local-items",
+    "STAGE": "local"
+  }
+}
